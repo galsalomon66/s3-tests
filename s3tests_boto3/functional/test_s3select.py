@@ -2,6 +2,7 @@ import nose
 import random
 import string
 from nose.plugins.attrib import attr
+from botocore.exceptions import ClientError
 
 import uuid
 from nose.tools import eq_ as eq
@@ -151,16 +152,20 @@ def upload_csv_object(bucket_name,new_key,obj):
 def run_s3select(bucket,key,query,column_delim=",",row_delim="\n",quot_char='"',esc_char='\\',csv_header_info="NONE"):
 
     s3 = get_client()
-
-    r = s3.select_object_content(
+    result = ""
+    try:
+        r = s3.select_object_content(
         Bucket=bucket,
         Key=key,
         ExpressionType='SQL',
         InputSerialization = {"CSV": {"RecordDelimiter" : row_delim, "FieldDelimiter" : column_delim,"QuoteEscapeCharacter": esc_char, "QuoteCharacter": quot_char, "FileHeaderInfo": csv_header_info}, "CompressionType": "NONE"},
         OutputSerialization = {"CSV": {}},
         Expression=query,)
+
+    except ClientError as c:
+        result += str(c)
+        return result
     
-    result = ""
     for event in r['Payload']:
         if 'Records' in event:
             records = event['Records']['Payload'].decode('utf-8')
@@ -190,7 +195,7 @@ def create_list_of_int(column_pos,obj,field_split=",",row_split="\n"):
             col_num+=1
 
     return list_of_int
-       
+
 @attr('s3select')
 def test_count_operation():
     csv_obj_name = get_random_string()
@@ -419,11 +424,11 @@ def test_complex_expressions():
     nose.tools.assert_equal( res_s3select, __res )
 
     # purpose of test that all where conditions create the same group of values, thus same result
-    res_s3select_substring = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,'select min(int(_2)),max(int(_2)) from stdin where substring(_2,1,1) == "1"')).replace("\n","")
-
-    res_s3select_between_numbers = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,'select min(int(_2)),max(int(_2)) from stdin where int(_2)>=100 and int(_2)<200')).replace("\n","")
-
-    res_s3select_eq_modolu = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,'select min(int(_2)),max(int(_2)) from stdin where int(_2)/100 == 1 or int(_2)/10 == 1 or int(_2) == 1')).replace("\n","")
+    res_s3select_substring = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,'select min(int(_2)),max(int(_2)) from s3object where int(substring(_2,1,1)) == 1 and char_length(_2) == 3;')).replace("\n","")
+    
+    res_s3select_between_numbers = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,'select min(int(_2)),max(int(_2)) from s3object where int(_2)>=100 and int(_2)<200;')).replace("\n","")
+    
+    res_s3select_eq_modolu = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,'select min(int(_2)),max(int(_2)) from s3object where int(_2)/100 == 1 and character_length(_2) == 3;')).replace("\n","")
 
     nose.tools.assert_equal( res_s3select_substring, res_s3select_between_numbers)
 
@@ -461,7 +466,7 @@ def test_alias_cyclic_refernce():
     csv_obj_name = get_random_string()
     bucket_name = "test"
     upload_csv_object(bucket_name,csv_obj_name,csv_obj)
-
+    
     res_s3select_alias = remove_xml_tags_from_result(  run_s3select(bucket_name,csv_obj_name,"select int(_1) as a1,int(_2) as a2, a1+a4 as a3, a5+a1 as a4, int(_3)+a3 as a5 from stdin;")  )
 
     find_res = res_s3select_alias.find("number of calls exceed maximum size, probably a cyclic reference to alias")
